@@ -1,0 +1,208 @@
+# compose/infrastructure.yml
+# Core infrastructure services that other services depend on
+
+services:
+  traefik-2:
+    image: traefik:v3.0
+    container_name: traefik-2
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      # API and Dashboard
+      #- --api.dashboard=true
+      #- --api.insecure=true  # Enables dashboard on port 8080
+
+      # Docker provider
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+
+      # Entrypoints
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+
+      # Force HTTPS redirect
+      - --entrypoints.http.http.redirections.entrypoint.to=https
+      - --entrypoints.http.http.redirections.entrypoint.scheme=https
+      - --entrypoints.http.http.redirections.entrypoint.permanent=true
+
+      # Certificate resolvers - both cloudflare and le (alias)
+      - --certificatesresolvers.cloudflare.acme.dnschallenge=true
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.delaybeforecheck=10
+
+      # Let's Encrypt HTTP Challenge as fallback
+      - --certificatesresolvers.http.acme.httpchallenge=true
+      - --certificatesresolvers.http.acme.httpchallenge.entrypoint=http
+      - --certificatesresolvers.http.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.http.acme.storage=/letsencrypt/acme-http.json
+
+      # Logging
+      - --log.level=DEBUG
+      - --accesslog=true
+    ports:
+      - "${HTTP_PORT}:80"
+      - "${HTTPS_PORT}:443"
+      - "8080:8080"  # Dashboard port
+    environment:
+      #- CF_API_EMAIL=${CLOUDFLARE_EMAIL}
+      - CF_DNS_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_PATH}/traefik/letsencrypt:/letsencrypt
+      - ${DATA_PATH}/traefik/config:/config
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      # HTTP to HTTPS redirect
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=http"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      # Dashboard
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik.entrypoints=https"
+      - "traefik.http.routers.traefik.tls.certresolver=cloudflare"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.middlewares=traefik-auth"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_USER}:${TRAEFIK_PASSWORD_HASH}"
+
+  portainer-2:
+    container_name: portainer-2
+    image: "portainer/portainer-ce:latest"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TIME_ZONE}
+    ports:
+      - "${PORTAINER_PORT}:9000/tcp"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_PATH}/portainer:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
+      - "traefik.http.routers.portainer.entrypoints=https"
+      - "traefik.http.routers.portainer.tls.certresolver=cloudflare"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+
+  duplicati-2:
+    image: lscr.io/linuxserver/duplicati:latest
+    container_name: duplicati-2
+    environment:
+      - PUID=0  # Needs root for backup access
+      - PGID=0
+      - TZ=${TIME_ZONE}
+    volumes:
+      - ${DATA_PATH}/duplicati:/config
+      - ${DATA_PATH}:/source:ro  # All service data in one place
+      - ${BACKUP_PATH}:/backups
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.duplicati.rule=Host(`backup.${DOMAIN}`)"
+      - "traefik.http.routers.duplicati.entrypoints=https"
+      - "traefik.http.routers.duplicati.tls.certresolver=cloudflare"
+      - "traefik.http.services.duplicati.loadbalancer.server.port=8200"
+
+  vaultwarden-2:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden-2
+    restart: unless-stopped
+    environment:
+      DOMAIN: https://warden.${DOMAIN}
+      SIGNUPS_ALLOWED: "false"
+      INVITATIONS_ALLOWED: "true"
+      SHOW_PASSWORD_HINT: "false"
+      ROCKET_PORT: 80
+    volumes:
+      - ${DATA_PATH}/vaultwarden:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vaultwarden.rule=Host(`warden.${DOMAIN}`)"
+      - "traefik.http.routers.vaultwarden.entrypoints=https"
+      - "traefik.http.routers.vaultwarden.tls.certresolver=cloudflare"
+      - "traefik.http.services.vaultwarden.loadbalancer.server.port=80"
+
+  code-server-2:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: code-server-2
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIME_ZONE}
+      - HASHED_PASSWORD=${CODESRV_PASSWORD_HASH}
+      - SUDO_PASSWORD_HASH=${CODESRV_SUDO_PWD_HASH}
+      - DEFAULT_WORKSPACE=/workspace
+    volumes:
+      - ${DATA_PATH}/code-server:/config
+      - ${DATA_PATH}:/workspace
+      - /opt:/opt:ro
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.code.rule=Host(`code.${DOMAIN}`)"
+      - "traefik.http.routers.code.entrypoints=https"
+      - "traefik.http.routers.code.tls.certresolver=cloudflare"
+      - "traefik.http.services.code.loadbalancer.server.port=8443"
+
+  adguard-2:
+    image: adguard/adguardhome
+    container_name: adguard-2
+    volumes:
+      - ${DATA_PATH}/adguard/work:/opt/adguardhome/work
+      - ${DATA_PATH}/adguard/conf:/opt/adguardhome/conf
+    #network_mode: host  # Required for DNS
+    ports:
+      - "53:53/tcp"       # DNS
+      - "53:53/udp"       # DNS
+      - "853:853/tcp"     # DNS-over-TLS (optional)
+      - "80:80/tcp"       # http web interface
+      #- "3000:3000/tcp'  # initial setup web interface
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.adguard.rule=Host(`guard.${DOMAIN}`)"
+      - "traefik.http.routers.adguard.entrypoints=https"
+      - "traefik.http.routers.adguard.tls=true"
+      - "traefik.http.routers.adguard.tls.certresolver=cloudflare"
+      - "traefik.http.services.adguard.loadbalancer.server.port=80"
+
+  tailscale-2:
+    image: tailscale/tailscale:stable
+    container_name: tailscale-2
+    hostname: ${HOSTNAME}-tailscale
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - "TS_EXTRA_ARGS=--advertise-exit-node --advertise-routes=${TAILSCALE_ADVERTISE_ROUTES}"
+    volumes:
+      - ${DATA_PATH}/tailscale/state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    restart: unless-stopped
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

@@ -1,0 +1,84 @@
+# compose/productivity.yml
+# Productivity and documentation tools
+
+services:
+  bookstack:
+    image: lscr.io/linuxserver/bookstack:latest
+    container_name: bookstack
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - APP_URL=https://wiki.${DOMAIN}
+      - DB_HOST=bookstack_mariadb
+      - DB_PORT=3306
+      - DB_USER=${BOOKSTACK_MARIADB_USER}
+      - DB_PASS=${BOOKSTACK_MARIADB_PASSWORD}
+      - DB_DATABASE=${BOOKSTACK_MARIADB_DATABASE}
+      - ALLOWED_IFRAME_HOSTS=https://wiki.${DOMAIN}
+      - SESSION_LIFETIME=600
+      - MAIL_DRIVER=smtp
+      - MAIL_HOST=${BOOKSTACK_MAIL_HOST}
+      - MAIL_PORT=${BOOKSTACK_MAIL_PORT}
+      - MAIL_ENCRYPTION=tls
+      - MAIL_USERNAME=${BOOKSTACK_MAIL_USERNAME}
+      - MAIL_PASSWORD=${BOOKSTACK_MAIL_PASSWORD}
+      - MAIL_FROM=${BOOKSTACK_MAIL_USERNAME}
+      - MAIL_FROM_NAME=BookStack
+      - APP_TIMEZONE=${TIME_ZONE}
+    volumes:
+      - ${DATA_PATH}/bookstack/app_data:/config
+    restart: unless-stopped
+    depends_on:
+      - bookstack_mariadb
+    networks:
+      - proxy
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bookstack.rule=Host(`wiki.${DOMAIN}`)"
+      - "traefik.http.routers.bookstack.entrypoints=https"
+      - "traefik.http.routers.bookstack.tls.certresolver=cloudflare"
+      - "traefik.http.services.bookstack.loadbalancer.server.port=80"
+
+  bookstack_mariadb:
+    image: lscr.io/linuxserver/mariadb:latest
+    container_name: bookstack_mariadb
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - MYSQL_ROOT_PASSWORD=${BOOKSTACK_MARIADB_ROOT_PASSWORD}
+      - TZ=${TIME_ZONE}
+      - MYSQL_DATABASE=${BOOKSTACK_MARIADB_DATABASE}
+      - MYSQL_USER=${BOOKSTACK_MARIADB_USER}
+      - MYSQL_PASSWORD=${BOOKSTACK_MARIADB_PASSWORD}
+    volumes:
+      - ${DATA_PATH}/bookstack/db_data:/config
+    restart: unless-stopped
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 5
+      interval: 30s
+
+  plantuml-server:
+    image: plantuml/plantuml-server:jetty
+    container_name: plantuml-server
+    restart: unless-stopped
+    environment:
+      - TZ=${TIME_ZONE}
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.plantuml.rule=Host(`plantuml.${DOMAIN}`)"
+      - "traefik.http.routers.plantuml.entrypoints=https"
+      - "traefik.http.routers.plantuml.tls.certresolver=cloudflare"
+      - "traefik.http.services.plantuml.loadbalancer.server.port=8080"
+
+networks:
+  proxy:
+    external: true
+  backend:
+    internal: true

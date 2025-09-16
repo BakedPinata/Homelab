@@ -1,0 +1,46 @@
+# compose/monitoring.yml
+# Monitoring and visualization services
+
+services:
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    user: "1000"
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SECURITY_ADMIN_EMAIL=${GRAFANA_ADMIN_EMAIL}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+      - GF_SERVER_DOMAIN=grafana.${DOMAIN}
+    volumes:
+      - ${DATA_PATH}/grafana:/var/lib/grafana
+    networks:
+      - proxy
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=https"
+      - "traefik.http.routers.grafana.tls.certresolver=cloudflare"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  openspeedtest:
+    container_name: openspeedtest
+    image: openspeedtest/latest
+    restart: unless-stopped
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.speedtest.rule=Host(`speedtest.${DOMAIN}`)"
+      - "traefik.http.routers.speedtest.entrypoints=https"
+      - "traefik.http.routers.speedtest.tls.certresolver=cloudflare"
+      - "traefik.http.services.speedtest.loadbalancer.server.port=3000"
+
+networks:
+  proxy:
+    external: true
+  backend:
+    internal: true

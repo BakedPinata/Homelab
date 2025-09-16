@@ -1,0 +1,199 @@
+# compose/homeautomation.yml
+# Home Assistant and related IoT services
+
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    volumes:
+      - ${DATA_PATH}/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    network_mode: host  # Required for discovery protocols
+    depends_on:
+      - homeassistant_mariadb
+      - homeassistant_influxdb
+      - mosquitto
+      - zigbee2mqtt
+    environment:
+      - TZ=${TIME_ZONE}
+
+  homeassistant_mariadb:
+    container_name: homeassistant_mariadb
+    image: mariadb:11.2.2
+    restart: unless-stopped
+    environment:
+      - TZ=${TIME_ZONE}
+      - MYSQL_ROOT_PASSWORD=${HOMEASSISTANT_MARIADB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${HOMEASSISTANT_MARIADB_DATABASE}
+      - MYSQL_USER=${HOMEASSISTANT_MARIADB_USER}
+      - MYSQL_PASSWORD=${HOMEASSISTANT_MARIADB_PASSWORD}
+    volumes:
+      - ${DATA_PATH}/homeassistant/mariadb/data:/var/lib/mysql
+      - ${DATA_PATH}/homeassistant/mariadb/config:/etc/mysql/conf.d
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 5
+      interval: 30s
+
+  homeassistant_influxdb:
+    container_name: homeassistant_influxdb
+    image: influxdb:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TIME_ZONE}
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${HOMEASSISTANT_INFLUXDB_USER}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${HOMEASSISTANT_INFLUXDB_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${HOMEASSISTANT_INFLUXDB_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${HOMEASSISTANT_INFLUXDB_BUCKET}
+      - DOCKER_INFLUXDB_INIT_RETENTION=2w
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${HOMEASSISTANT_INFLUXDB_TOKEN}
+    volumes:
+      - ${DATA_PATH}/homeassistant/influxdb/data:/var/lib/influxdb2
+      - ${DATA_PATH}/homeassistant/influxdb/config:/etc/influxdb2
+    networks:
+      - backend
+      - proxy
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.influxdb.rule=Host(`influxdb.${DOMAIN}`)"
+      - "traefik.http.routers.influxdb.entrypoints=https"
+      - "traefik.http.routers.influxdb.tls.certresolver=cloudflare"
+      - "traefik.http.services.influxdb.loadbalancer.server.port=8086"
+
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TIME_ZONE}
+    volumes:
+      - ${DATA_PATH}/mosquitto/config:/mosquitto/config
+      - ${DATA_PATH}/mosquitto/data:/mosquitto/data
+      - ${DATA_PATH}/mosquitto/log:/mosquitto/log
+    ports:
+      - "1883:1883"  # MQTT
+      - "9001:9001"  # Websockets
+    stdin_open: true
+    tty: true
+    networks:
+      - proxy
+
+  zigbee2mqtt:
+    container_name: zigbee2mqtt
+    image: koenkk/zigbee2mqtt:latest
+    restart: unless-stopped
+    volumes:
+      - ${DATA_PATH}/zigbee2mqtt/data:/app/data
+      - /run/udev:/run/udev:ro
+    environment:
+      - TZ=${TIME_ZONE}
+    devices:
+      # Update this with your actual device
+      - ${ZIGBEE_DEVICE}:/dev/ttyUSB0
+    group_add:
+      - dialout
+    user: 1000:1000
+    networks:
+      - backend
+      - proxy
+    depends_on:
+      - mosquitto
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.zigbee2mqtt.rule=Host(`zigbee.${DOMAIN}`)"
+      - "traefik.http.routers.zigbee2mqtt.entrypoints=https"
+      - "traefik.http.routers.zigbee2mqtt.tls.certresolver=cloudflare"
+      - "traefik.http.services.zigbee2mqtt.loadbalancer.server.port=8080"
+
+  nodered:
+    container_name: nodered
+    image: nodered/node-red:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TIME_ZONE}
+    volumes:
+      - ${DATA_PATH}/nodered/data:/data
+    depends_on:
+      - mosquitto
+    networks:
+      - backend
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nodered.rule=Host(`nodered.${DOMAIN}`)"
+      - "traefik.http.routers.nodered.entrypoints=https"
+      - "traefik.http.routers.nodered.tls.certresolver=cloudflare"
+      - "traefik.http.services.nodered.loadbalancer.server.port=1880"
+
+  esphome:
+    container_name: esphome
+    image: ghcr.io/esphome/esphome:latest
+    volumes:
+      - ${DATA_PATH}/esphome/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - USERNAME=${ESPHOME_USERNAME}
+      - PASSWORD=${ESPHOME_PASSWORD}
+
+  matter-server:
+    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    container_name: matter-server
+    restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
+    volumes:
+      - ${DATA_PATH}/matter/data:/data
+      - /run/dbus:/run/dbus:ro
+    network_mode: host
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - VPN_SERVICE_PROVIDER=private internet access
+      - OPENVPN_USER=${VPN_USERNAME}
+      - OPENVPN_PASSWORD=${VPN_PASSWORD}
+      - TZ=${TIME_ZONE}
+    volumes:
+      - ${DATA_PATH}/gluetun:/gluetun
+    ports:
+      # Expose ONLY the proxy endpoint to your LAN/ingress
+      - "28458:8080"   # maps to proxy container's 8080 via network_mode: service:gluetun
+    restart: unless-stopped
+
+  proxy:
+    image: ghcr.io/bakedpinata/fetchprox:main
+    container_name: vpn-fetch-proxy
+    # Share the gluetun network stack so outbound goes through VPN
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+       - CORS_ORIGINS=${FETCHPROX_CORS_ORIGINS:-}  # Now requires explicit configuration
+       - ALLOW_HOSTS=${FETCHPROX_ALLOW_HOSTS:-}   # Optional allowlist; leave blank to allow any public host
+       - MAX_CONTENT_BYTES=${FETCHPROX_MAX_CONTENT_BYTES:-25000000}
+       - TIMEOUT_SECONDS=${FETCHPROX_TIMEOUT_SECONDS:-30}
+       - RATE_LIMIT_REQUESTS=${FETCHPROX_RATE_LIMIT_REQUESTS:-100}
+       - RATE_LIMIT_WINDOW_MINUTES=${FETCHPROX_RATE_LIMIT_WINDOW_MINUTES:-1}
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+  proxy:
+    external: true

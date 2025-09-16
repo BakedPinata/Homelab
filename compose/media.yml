@@ -1,0 +1,42 @@
+# compose/media.yml
+# Media and download services
+
+services:
+  qbittorrent:
+    image: dyonr/qbittorrentvpn:latest
+    container_name: qbittorrent
+    privileged: true  # Required for VPN
+    environment:
+      - VPN_ENABLED=yes
+      - VPN_TYPE=openvpn
+      - VPN_USERNAME=${VPN_USERNAME}
+      - VPN_PASSWORD=${VPN_PASSWORD}
+      - LAN_NETWORK=${QBITTORRENT_LAN_NETWORK}
+      - PUID=1000
+      - PGID=1000
+      - HEALTH_CHECK_HOST=1.1.1.1
+      - HEALTH_CHECK_INTERVAL=300
+      - INSTALL_PYTHON3=yes
+    volumes:
+      - ${DATA_PATH}/qbittorrent/config:/config
+      - ${QBITTORRENT_DOWNLOAD_PATH}:/downloads
+      - ${DATA_PATH}/qbittorrent/VueTorrent:/vuetorrent
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8999:8999"       # Torrent port TCP
+      - "8999:8999/udp"   # Torrent port UDP
+    restart: unless-stopped
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qbittorrent.rule=Host(`qbit.${DOMAIN}`)"
+      - "traefik.http.routers.qbittorrent.entrypoints=https"
+      - "traefik.http.routers.qbittorrent.tls.certresolver=cloudflare"
+      - "traefik.http.services.qbittorrent.loadbalancer.server.port=8080"
+      - "traefik.http.routers.qbittorrent.middlewares=qbt-auth"
+      - "traefik.http.middlewares.qbt-auth.basicauth.users=${TRAEFIK_USER}:${TRAEFIK_PASSWORD_HASH}"
+
+networks:
+  proxy:
+    external: true

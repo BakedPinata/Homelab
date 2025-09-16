@@ -1,0 +1,67 @@
+# compose/network.yml
+# Network management services
+
+services:
+  unifi:
+    image: lscr.io/linuxserver/unifi-network-application:latest
+    container_name: unifi
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIME_ZONE}
+      - MONGO_USER=${UNIFI_MONGODB_UNIFI_USERNAME}
+      - MONGO_PASS=${UNIFI_MONGODB_UNIFI_PASSWORD}
+      - MONGO_HOST=unifi_mongodb
+      - MONGO_PORT=27017
+      - MONGO_DBNAME=unifi
+    volumes:
+      - ${DATA_PATH}/unifi/config:/config
+    ports:
+      # Required ports for UniFi functionality
+      - "3478:3478/udp"     # STUN
+      - "10001:10001/udp"   # AP Discovery
+      - "8080:8080"         # Device communication
+      - "1900:1900/udp"     # L2 Discovery
+      - "8843:8843"         # Guest portal HTTPS
+      - "8880:8880"         # Guest portal HTTP
+      - "6789:6789"         # Mobile throughput test
+      - "5514:5514/udp"     # Remote syslog
+    restart: unless-stopped
+    depends_on:
+      - unifi_mongodb
+    networks:
+      - proxy
+      - backend
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.unifi.rule=Host(`unifi.${DOMAIN}`)
+      - traefik.http.routers.unifi.entrypoints=https
+      - traefik.http.routers.unifi.tls.certresolver=cloudflare
+      - traefik.http.services.unifi.loadbalancer.server.port=8443
+      - traefik.http.services.unifi.loadbalancer.server.scheme=https
+
+  unifi_mongodb:
+    image: mongo:4.4
+    container_name: unifi_mongodb
+    restart: unless-stopped
+    environment:
+      - TZ=${TIME_ZONE}
+    volumes:
+      - ${DATA_PATH}/unifi/mongodb/data:/data/db
+      - ${DATA_PATH}/unifi/mongodb/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    command: 
+      - '--logpath'
+      - '/var/log/mongodb/mongod.log'
+    networks:
+      - backend
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongo localhost:27017/test --quiet
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  proxy:
+    external: true
+  backend:
+    internal: true

@@ -1,0 +1,29 @@
+
+# docker-compose.yml
+# Base configuration with common networks
+# This file should be used with other compose files
+
+# Define common networks
+networks:
+  proxy:
+    external: true
+    name: proxy
+  backend:
+    internal: true
+    name: backend
+
+# Common logging configuration that can be extended
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Common restart policy
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+# You can define common environment variables here
+# that will be merged with service-specific ones
+x-common-env: &common-env
+  TZ: ${TIME_ZONE}
