@@ -55,26 +55,54 @@ usage() {
 }
 
 # Function to get compose files for selected stacks
+# Returns: compose files string on success, exits on error
 get_compose_files() {
     local stacks="$@"
     local files="-f $BASE_COMPOSE"
+    local found_valid=false
+    local invalid_stacks=""
     
     if [ -z "$stacks" ] || [ "$stacks" = "all" ]; then
         # Include all compose files
         for file in $COMPOSE_DIR/*.yml; do
             if [ -f "$file" ]; then
                 files="$files -f $file"
+                found_valid=true
             fi
         done
+        
+        # If no stack files found in compose directory, just use base
+        if [ "$found_valid" = false ]; then
+            echo -e "${YELLOW}Warning: No stack files found in $COMPOSE_DIR, using base compose file only${NC}" >&2
+        fi
     else
         # Include only specified stacks
         for stack in $stacks; do
             if [ -f "$COMPOSE_DIR/$stack.yml" ]; then
                 files="$files -f $COMPOSE_DIR/$stack.yml"
+                found_valid=true
             else
-                echo -e "${YELLOW}Warning: Stack '$stack' not found${NC}"
+                invalid_stacks="$invalid_stacks $stack"
             fi
         done
+        
+        # If invalid stacks were specified, report and exit
+        if [ -n "$invalid_stacks" ]; then
+            echo -e "${RED}Error: Invalid stack name(s):$invalid_stacks${NC}" >&2
+            echo -e "${YELLOW}Available stacks:${NC}" >&2
+            for file in $COMPOSE_DIR/*.yml; do
+                if [ -f "$file" ]; then
+                    basename "$file" .yml >&2
+                fi
+            done
+            exit 1
+        fi
+        
+        # If no valid stacks found, exit
+        if [ "$found_valid" = false ]; then
+            echo -e "${RED}Error: No valid stacks specified${NC}" >&2
+            exit 1
+        fi
     fi
     
     echo "$files"
@@ -120,15 +148,18 @@ check_health() {
 backup_data() {
     echo -e "${GREEN}Creating backup...${NC}"
     
+    # Get compose files for all stacks
+    COMPOSE_FILES=$(get_compose_files all)
+    
     # Stop containers for consistent backup
-    docker compose $compose_files down
+    docker compose $COMPOSE_FILES down
     
     # Create backup with timestamp
     BACKUP_NAME="homelab-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
     tar -czf "$BACKUP_PATH/$BACKUP_NAME" -C "$DATA_PATH" .
     
     # Restart containers
-    docker compose $compose_files up -d
+    docker compose $COMPOSE_FILES up -d
     
     echo -e "${GREEN}Backup created: $BACKUP_PATH/$BACKUP_NAME${NC}"
 }
@@ -144,6 +175,7 @@ case "$COMMAND" in
         ;;
     up)
         STACKS="$@"
+        # get_compose_files will exit on error, so no need to check
         COMPOSE_FILES=$(get_compose_files $STACKS)
         echo -e "${GREEN}Starting stacks...${NC}"
         docker compose $COMPOSE_FILES up -d
